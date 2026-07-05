@@ -1,27 +1,28 @@
 """
 niche_content_ideas.py
 
-Le manda a OpenAI las estadísticas de un nicho (volumen de búsqueda, competencia, etc.)
-y le pide exactamente 5 ideas de videos virales + 3 preguntas frecuentes, en JSON.
+Le manda a Google Gemini las estadísticas de un nicho (volumen de búsqueda,
+competencia, etc.) y le pide exactamente 5 ideas de videos virales + 3
+preguntas frecuentes, en JSON.
 
-Usa "Structured Outputs" (response_format con json_schema) en vez de solo pedir
-JSON por prompt. Esto es importante: con un prompt suelto ("devolveme JSON"),
-el modelo puede agregar texto antes/después, olvidar una clave, o romper el
-formato — y te explota el json.loads() en producción. Con json_schema, la API
-garantiza que la respuesta cumple exactamente esa estructura.
+Por qué Gemini y no OpenAI: OpenAI ya no da créditos gratis a cuentas nuevas
+(piden mínimo 5 USD prepagos). Gemini sí tiene una capa gratuita real y
+generosa (miles de pedidos por día, sin tarjeta de crédito), suficiente para
+esta tarea. El código usa "structured output" (responseSchema) para
+garantizar que la respuesta sea JSON válido con la forma exacta que
+necesitamos, igual que hacíamos con OpenAI.
 
 Requisitos:
-    pip install openai python-dotenv
+    pip install requests python-dotenv
 
 Variables de entorno:
-    OPENAI_API_KEY=tu_api_key
+    GEMINI_API_KEY=tu_api_key   (se consigue gratis en aistudio.google.com/apikey)
 """
 
 import os
 import json
 
 import requests
-from openai import OpenAI
 
 try:
     from dotenv import load_dotenv
@@ -29,98 +30,81 @@ try:
 except ImportError:
     pass
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-MODEL = "gpt-4o-mini"  # buena relación costo/calidad para esta tarea
+MODEL = "gemini-2.0-flash"  # rápido, gratuito, de sobra para esta tarea
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 
-# Schema que la respuesta del modelo debe cumplir SÍ o SÍ.
 RESPONSE_SCHEMA = {
-    "name": "niche_content_ideas",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "video_ideas": {
-                "type": "array",
-                "minItems": 5,
-                "maxItems": 5,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string", "description": "Título del video, estilo clickbait honesto"},
-                        "angle": {"type": "string", "description": "Por qué este ángulo puede volverse viral"},
-                    },
-                    "required": ["title", "angle"],
-                    "additionalProperties": False,
+    "type": "OBJECT",
+    "properties": {
+        "video_ideas": {
+            "type": "ARRAY",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "title": {"type": "STRING"},
+                    "angle": {"type": "STRING"},
                 },
-            },
-            "faqs": {
-                "type": "array",
-                "minItems": 3,
-                "maxItems": 3,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "question": {"type": "string"},
-                        "answer": {"type": "string", "description": "Respuesta breve, 1-2 oraciones"},
-                    },
-                    "required": ["question", "answer"],
-                    "additionalProperties": False,
-                },
+                "required": ["title", "angle"],
             },
         },
-        "required": ["video_ideas", "faqs"],
-        "additionalProperties": False,
+        "faqs": {
+            "type": "ARRAY",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "question": {"type": "STRING"},
+                    "answer": {"type": "STRING"},
+                },
+                "required": ["question", "answer"],
+            },
+        },
     },
+    "required": ["video_ideas", "faqs"],
 }
 
 
 def generate_content_ideas(niche_stats: dict) -> dict:
-    """
-    niche_stats esperado, por ejemplo:
-    {
-        "niche": "Finanzas Personales",
-        "search_volume": 74000,
-        "competition": "media",
-        "avg_cpm": 12.4
-    }
-    """
-    system_prompt = (
+    prompt = (
         "Sos un estratega de contenido de YouTube especializado en encontrar "
         "ángulos virales dentro de nichos específicos. Basate únicamente en los "
-        "datos que te pasan, no inventes estadísticas nuevas."
-    )
-
-    user_prompt = (
+        "datos que te paso, no inventes estadísticas nuevas.\n\n"
         f"Datos del nicho:\n{json.dumps(niche_stats, ensure_ascii=False, indent=2)}\n\n"
         "Generá exactamente 5 ideas de videos con alto potencial viral para este nicho, "
         "y exactamente 3 preguntas frecuentes que la audiencia de este nicho suele buscar, "
-        "con su respuesta breve. Respondé en español."
+        "con su respuesta breve (1-2 oraciones). Respondé en español."
     )
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": RESPONSE_SCHEMA,
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.8,
+            "responseMimeType": "application/json",
+            "responseSchema": RESPONSE_SCHEMA,
         },
-        temperature=0.8,  # un poco de creatividad para los títulos, sin perder foco
-    )
+    }
 
-    # Con Structured Outputs esto SIEMPRE es JSON válido con esta forma exacta,
-    # así que el parseo nunca debería fallar por formato.
-    return json.loads(response.choices[0].message.content)
+    response = requests.post(
+        GEMINI_URL,
+        params={"key": GEMINI_API_KEY},
+        json=payload,
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+    return json.loads(raw_text)
 
 
 def upload_to_supabase(niche_name: str, result: dict) -> None:
-    """Busca el id del nicho por nombre y guarda las ideas/FAQs en niche_content_suggestions."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         print("Faltan SUPABASE_URL o SUPABASE_SERVICE_KEY: se omite la subida.")
         return
@@ -131,7 +115,6 @@ def upload_to_supabase(niche_name: str, result: dict) -> None:
         "Content-Type": "application/json",
     }
 
-    # 1) Buscar el id del nicho por nombre.
     lookup_url = f"{SUPABASE_URL}/rest/v1/niches"
     lookup_resp = requests.get(
         lookup_url,
@@ -148,7 +131,6 @@ def upload_to_supabase(niche_name: str, result: dict) -> None:
 
     niche_id = matches[0]["id"]
 
-    # 2) Insertar las ideas + FAQs asociadas a ese nicho.
     insert_url = f"{SUPABASE_URL}/rest/v1/niche_content_suggestions"
     payload = {
         "niche_id": niche_id,
@@ -172,8 +154,9 @@ def save_to_json(niche_name: str, data: dict, filepath: str = None) -> str:
 
 
 def main():
-    # Ejemplo: esto normalmente vendría de tu base de Supabase (la tabla que
-    # armamos en el script anterior), no hardcodeado.
+    if not GEMINI_API_KEY:
+        raise EnvironmentError("Falta la variable de entorno GEMINI_API_KEY")
+
     niche_stats = {
         "niche": "Finanzas Personales",
         "search_volume": 74000,
