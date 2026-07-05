@@ -10,7 +10,7 @@ Por qué Gemini y no OpenAI: OpenAI ya no da créditos gratis a cuentas nuevas
 generosa (miles de pedidos por día, sin tarjeta de crédito), suficiente para
 esta tarea. El código usa "structured output" (responseSchema) para
 garantizar que la respuesta sea JSON válido con la forma exacta que
-necesitamos, igual que hacíamos con OpenAI.
+necesitamos.
 
 Requisitos:
     pip install requests python-dotenv
@@ -34,7 +34,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
-MODEL = "gemini-2.0-flash"  # rápido, gratuito, de sobra para esta tarea
+MODEL = "gemini-3.1-flash-lite"  # modelo actual y estable con capa gratuita (jul. 2026)
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 
 RESPONSE_SCHEMA = {
